@@ -66,3 +66,7 @@ A real-time location sharing application that allows authenticated users to shar
   - There is currently no logic for removing inactive users/markers from the map. Disconnected users will stay at their last known location indefinitely until the page is refreshed.
   - The database consumer assumes continuous growth of the `location_history` table without any retention policy or data cleanup.
   - A real-world production deployment would require setting up robust Kafka clusters, managing schema registries, and securing WebSocket connections (WSS), which are not fully addressed in this learning/development setup.
+
+## Youtube video
+
+https://youtu.be/GXiQdcWOyYY
