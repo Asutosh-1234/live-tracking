@@ -2,66 +2,48 @@ import http from 'node:http';
 import path from 'node:path';
 
 import express from 'express';
-import { Server } from 'socket.io';
+import session from 'express-session';
 
-import { kafkaClient } from './kafka-client.js';
+import 'dotenv/config';
+
+import { initDb } from './src/db.js';
+import passport from './src/auth.js';
+import { initSocket } from './src/socket.js';
+import { initConsumers } from './src/consumers.js';
 
 async function main() {
+  await initDb();
+
   const PORT = process.env.PORT ?? 8000;
 
   const app = express();
   const server = http.createServer(app);
-  const io = new Server();
 
-  const kafkaProducer = kafkaClient.producer();
-  await kafkaProducer.connect();
-
-  const kafkaConsumer = kafkaClient.consumer({
-    groupId: `socket-server-${PORT}`,
+  const sessionMiddleware = session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
   });
-  await kafkaConsumer.connect();
+  app.use(sessionMiddleware);
 
-  await kafkaConsumer.subscribe({
-    topics: ['location-updates'],
-    fromBeginning: true,
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+  app.get('/auth/google/callback',
+    passport.authenticate('google', { failureRedirect: '/' }),
+    (_req, res) => res.redirect('/'),
+  );
+  app.get('/auth/logout', (req, res, next) => {
+    req.logout((err) => { if (err) return next(err); res.redirect('/'); });
   });
-
-  kafkaConsumer.run({
-    eachMessage: async ({ topic, partition, message, heartbeat }) => {
-      const data = JSON.parse(message.value.toString());
-      console.log(`KafkaConsumer Data Received`, { data });
-      io.emit('server:location:update', {
-        id: data.id,
-        latitude: data.latitude,
-        longitude: data.longitude,
-      });
-      await heartbeat();
-    },
+  app.get('/auth/me', (req, res) => {
+    if (!req.isAuthenticated()) return res.status(401).json({ error: 'Not authenticated' });
+    res.json(req.user);
   });
 
-  io.attach(server);
-
-  io.on('connection', (socket) => {
-    console.log(`[Socket:${socket.id}]: Connected Success...`);
-
-    socket.on('client:location:update', async (locationData) => {
-      const { latitude, longitude } = locationData;
-      console.log(
-        `[Socket:${socket.id}]:client:location:update:`,
-        locationData,
-      );
-
-      await kafkaProducer.send({
-        topic: 'location-updates',
-        messages: [
-          {
-            key: socket.id,
-            value: JSON.stringify({ id: socket.id, latitude, longitude }),
-          },
-        ],
-      });
-    });
-  });
+  const io = await initSocket(server, sessionMiddleware);
+  await initConsumers(io, PORT);
 
   app.use(express.static(path.resolve('./public')));
 
